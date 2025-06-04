@@ -64,6 +64,7 @@ def normalize_text(text):
     if pd.isna(text) or not text: # Manejo de NaN y strings vacíos
         return ""
     text = str(text).lower()
+    text = text.replace("cuzco", "cusco")
     nfkd_form = unicodedata.normalize('NFKD', text)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
 
@@ -240,7 +241,7 @@ import json
 def load_chunks_from_jsonl():
     # __file__ es la ruta del script actual (chatbot_logic.py)
     script_dir = os.path.dirname(os.path.abspath(__file__)) # .../src_chatbot/
-    project_root = os.path.join(script_dir, '..')          # .../QLAB_CHATBOT_CORRUPCION/
+    project_root = os.path.abspath(os.path.join(script_dir, '..', '..'))         # .../QLAB_CHATBOT_CORRUPCION/
     input_file = os.path.join(project_root, 'output', 'salida_chunks_final.jsonl')
     
 
