@@ -18,12 +18,14 @@ Eres un asistente virtual experto en analizar y resumir informes de auditoría d
 
 **Instrucciones Específicas para Tipos de Preguntas:**
 
-**A. Para "Formular informes" o "Resumir situación" por año y región/localidad:**
-    *   Cuando se te pida un resumen o "informe" para un **año y una región específicos**:
+**A. Para "Formular informes" o "Resumir situación" por  región/localidad:**
+    *   Cuando se te pida un resumen o "informe" para  ** una región específicos**:
         1.  Identifica todos los chunks relevantes proporcionados en el contexto que coincidan con esos criterios (puedes guiarte por los metadatos del chunk si estuvieran disponibles en el contexto, o por la información textual).
-        2.  Sintetiza la información de estos chunks.
-        3.  Estructura tu respuesta de la siguiente manera (si es posible y la información lo permite):
-            *   "Resumen de hallazgos para [Localidad/Región] en el año [Año]:"
+        2.  Sintetiza la información de estos chunks, lo cual puede incluir varios informes relvantes para la region, tu tarea es usar los mas relevantes y crear un informe sintetizado.
+        3.  No existe un informe general por **region**, pero se puede generar a partir de infromes espcificos de localidades dentro de la region, tu tarea es realizar eso siguiendo la siguientes pautas:
+        4.  Si hay múltiples informes relevantes, sintetiza la información de cada uno siguiendo el formato que se detalla a continuación.
+        5.  Estructura tu respuesta de la siguiente manera (si es posible y la información lo permite):
+            *   "Resumen de hallazgos para [Localidad/Región] :"
             *   Para cada informe relevante encontrado:
                 *   "**Informe [NRO-INFORME-AÑO] (Entidad: [ENTIDAD_AUDITADA]):**"
                 *   "   **Objetivo Principal de la Auditoría:** [Si está disponible en el chunk de objetivo]"
@@ -35,7 +37,7 @@ Eres un asistente virtual experto en analizar y resumir informes de auditoría d
                 *   "      - [Resumen de la recomendación 2 del informe, etc.]"
                 *   "   **Posibles Implicancias (si se mencionan en los metadatos o el texto del chunk de observación):** [Ej: Responsabilidad Penal, Administrativa, Perjuicio Económico de S/ XXX]"
             *   Si hay múltiples informes, preséntalos secuencialmente.
-            *   Finaliza con un breve resumen general si puedes identificar patrones o temas comunes entre los informes de esa localidad/año.
+            *   Finaliza con un breve resumen  si puedes identificar patrones o temas comunes entre los informes de esa localidad/año.
     *   Si no hay informes para la combinación exacta, sigue la política de manejo de información faltante (Principio Clave 5).
 
 **B. Para responder sobre la "situación de la corrupción" o "hallazgos de corrupción" en años y regiones específicas:**
@@ -130,9 +132,9 @@ def extract_query_parameters(question):
 
     stopwords = [
         "de", "la", "el", "en", "y", "o", "del", "los", "las", "un", "una", "unos", "unas",
-        "sobre", "acerca", "informe", "reporte", "situacion", "caso", "casos", "corrupcion",
+        "sobre", "acerca", "reporte", "situacion", "caso", "casos", "corrupcion",
         "auditoria", "contraloria", "gobierno", "municipalidad", "region", "provincia", "distrito",
-        "general", "republica", "peru", "quiero", "saber", "dime", "podrias", "informacion",
+         "republica", "peru", "quiero", "saber", "dime", "podrias", "informacion",
         "detalles", "cual", "cuales", "como", "cuando", "donde", "que", "quien", "porque",
         "mas", "menos", "todo", "todos", "entidad", "publico", "publica"
     ]
@@ -148,7 +150,7 @@ def extract_query_parameters(question):
     return params
 
 # --- ESTA ES LA VERSIÓN DE find_relevant_chunks QUE SE CONSERVA Y CORRIGE ---
-def find_relevant_chunks(question, all_docs_chunks, max_chunks=10):
+def find_relevant_chunks(question, all_docs_chunks, max_chunks=25):
     """
     Encuentra chunks relevantes:
     1. Extrae parámetros (año, REGIONES) de la pregunta.
@@ -334,7 +336,7 @@ def send_question_to_openai(question, all_docs_chunks, conversation_history, ope
         for chunk in relevant_chunks
     ])
 
-    MAX_HISTORY_MESSAGES = 10
+    MAX_HISTORY_MESSAGES = 15
     trimmed_history = conversation_history[-MAX_HISTORY_MESSAGES:]
     messages = []
     # Usa el system_prompt pasado como argumento
@@ -345,14 +347,18 @@ def send_question_to_openai(question, all_docs_chunks, conversation_history, ope
 
     try:
         # Usa el openai_client pasado como argumento
+        
         response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0,
-            max_tokens=1500,
-            top_p=1,
-            frequency_penalty=0,
-            presence_penalty=0
+            model="gpt-4.1-mini",        # Modelo de lenguaje a usar
+            messages=messages,           # Historial de mensajes (incluye system prompt y contexto)
+            temperature=0.5,             # Aleatoriedad baja para respuestas formales y precisas
+            max_tokens=8896,             # Máximo de tokens en la respuesta (ajusta según necesidad y cuota)
+            top_p=1,                     # Diversidad máxima (puedes bajar a 0.8 para respuestas más conservadoras)
+            frequency_penalty=0.2,         # Penalización por repetición (sube si notas repeticiones)
+            presence_penalty=0,          # Penalización por nuevos temas (sube si quieres limitar temas nuevos)
+            # stop=["\nUsuario:"],       # (Opcional) Detener respuesta en ciertos tokens
+            # user="usuario123",         # (Opcional) ID de usuario para trazabilidad
+            # response_format="json_object", # (Opcional) Para respuestas estructuradas (si el modelo lo soporta)
         )
         return response.choices[0].message.content
     except Exception as e:
