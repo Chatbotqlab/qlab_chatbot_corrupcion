@@ -131,7 +131,7 @@ def extract_query_parameters(question):
 
     stopwords = [
         "de", "la", "el", "en", "y", "o", "del", "los", "las", "un", "una", "unos", "unas",
-        "sobre", "acerca", "informe", "reporte", "situacion", "caso", "casos", "corrupcion",
+        "sobre", "acerca", "reporte", "situacion", "caso", "casos", "corrupcion",
         "auditoria", "contraloria", "gobierno", "municipalidad", "region", "provincia", "distrito",
         "general", "republica", "peru", "quiero", "saber", "dime", "podrias", "informacion",
         "detalles", "cual", "cuales", "como", "cuando", "donde", "que", "quien", "porque",
@@ -353,8 +353,8 @@ def send_question_to_openai(question, all_docs_chunks, conversation_history, ope
         response = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=messages,
-            temperature=0,
-            max_tokens=1500,
+            temperature=0.5,
+            max_tokens=3500,
             top_p=1,
             frequency_penalty=0,
             presence_penalty=0
