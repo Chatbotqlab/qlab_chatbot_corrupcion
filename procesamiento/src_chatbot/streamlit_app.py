@@ -94,7 +94,7 @@ def main():
                 docs_chunks,
                 conversation_history,
                 client,             # El cliente OpenAI instanciado en este archivo
-                logic_system_prompt # El system_prompt importado de chatbot_logic.py
+                system_prompt_v2    # Usar la variable importada directamente
             )
 
             assistant_message = {"role": "assistant", "content": response_text}
