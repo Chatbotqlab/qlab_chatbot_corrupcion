@@ -351,9 +351,9 @@ def send_question_to_openai(question, all_docs_chunks, conversation_history, ope
     try:
         # Usa el openai_client pasado como argumento
         response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-nano",
             messages=messages,
-            temperature=0.5,
+            temperature=0.2,
             max_tokens=3500,
             top_p=1,
             frequency_penalty=0,
