@@ -6,7 +6,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 # Importar la configuración local
-from .src_embedding_generator import config
+from . import config
 
 # --- Carga de API Key y Cliente OpenAI ---
 load_dotenv() # Carga variables desde un archivo .env en la raíz del proyecto
