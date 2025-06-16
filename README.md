@@ -22,13 +22,13 @@ proyecto_chatbot_corrupcion/
 ├── .streamlit/                      # Configuración de Streamlit (logo y estilo)
 │   └── config.toml
 │
-├── data/                            # Datos originales (formato CSV o Excel)
-│   └── AC_total.xlsx
+├── data/                            # Datos originales
+│   └── AC_total.csv
 │
 ├── output/                          # Archivos de salida generados por los scripts
 │   ├── salida_chunks_final.jsonl         # Chunks de texto listos para embeddings
 │   ├── chunks_with_embeddings.jsonl      # Chunks enriquecidos con embeddings
-│   ├── salida_informes_consolidados...   # (otros posibles informes agregados)
+│   ├── salida_informes_consolidados...   
 │
 ├── procesamiento/
 │   ├── src_chatbot/                     # Módulo principal del chatbot
