@@ -1,2 +1,7 @@
 .streamlit/secrets.toml
 .env
+output/chunks_with_embeddings.jsonl
+<<<<<<< HEAD
+=======
+.venv
+>>>>>>> 0b818d8ea6a968932f3317e939f8cc230d2b5161
