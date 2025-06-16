@@ -1,2 +1,4 @@
 .streamlit/secrets.toml
 .env
+output/chunks_with_embeddings.jsonl
+.venv

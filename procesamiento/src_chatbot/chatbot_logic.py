@@ -2,6 +2,11 @@ import json
 import re
 import unicodedata
 import pandas as pd
+import os
+import json
+import numpy as np
+from openai import OpenAI 
+
 
 
 system_prompt_v2 = """
@@ -22,7 +27,7 @@ Eres un asistente virtual experto en analizar y resumir informes de auditoría d
     *   Cuando se te pida un resumen o "informe" para un **año y una región específicos**:
         1.  Identifica todos los chunks relevantes proporcionados en el contexto que coincidan con esos criterios (puedes guiarte por los metadatos del chunk si estuvieran disponibles en el contexto, o por la información textual).
         2.  Sintetiza la información de estos chunks.
-        3.  Estructura tu respuesta de la siguiente manera (si es posible y la información lo permite):
+        3.  Estructura tu respuesta de la siguiente manera:
             *   "Resumen de hallazgos para [Localidad/Región] en el año [Año]:"
             *   Para cada informe relevante encontrado:
                 *   "**Informe [NRO-INFORME-AÑO] (Entidad: [ENTIDAD_AUDITADA]):**"
@@ -58,6 +63,21 @@ Eres un asistente virtual experto en analizar y resumir informes de auditoría d
 *   **Limitación de Conocimiento:** Reitera que tu conocimiento se basa *exclusivamente* en los documentos que se te proporcionan en el contexto para cada consulta.
 """
 
+#######################################################################
+
+# Nueva función de utilidad para la similitud
+def cosine_similarity(vec_a, vec_b):
+    """Calcula la similitud coseno entre dos vectores numpy."""
+    return np.dot(vec_a, vec_b) / (np.linalg.norm(vec_a) * np.linalg.norm(vec_b))
+
+def get_embedding_for_query(text, client, model="text-embedding-3-small"):
+    """Función dedicada para obtener el embedding de la pregunta del usuario."""
+    text = text.replace("\n", " ")
+    response = client.embeddings.create(input=[text], model=model)
+    return np.array(response.data[0].embedding)
+
+
+########################################################################
 
 def normalize_text(text):
     """Normaliza el texto a minúsculas y quita tildes."""
@@ -149,178 +169,116 @@ def extract_query_parameters(question):
     return params
 
 # --- ESTA ES LA VERSIÓN DE find_relevant_chunks QUE SE CONSERVA Y CORRIGE ---
-def find_relevant_chunks(question, all_docs_chunks, max_chunks=10):
+def find_relevant_chunks_semantic(question, all_docs_chunks, openai_client, max_chunks=15):
     """
-    Encuentra chunks relevantes:
-    1. Extrae parámetros (año, REGIONES) de la pregunta.
-    2. Pre-filtra chunks basados en estos parámetros.
-    3. Calcula un score de relevancia para los chunks pre-filtrados basado en palabras clave.
-    4. Devuelve un diccionario con el estado y los chunks.
+    Encuentra chunks relevantes usando un enfoque híbrido:
+    1. Filtra por metadatos (año, región) extraídos de la pregunta.
+    2. Genera un embedding para la pregunta del usuario.
+    3. Calcula la similitud semántica (coseno) con los chunks pre-filtrados.
+    4. Devuelve los chunks más similares.
     """
-    # --- CORRECCIÓN AQUÍ: Llama a la función extract_query_parameters definida arriba ---
     query_params = extract_query_parameters(question)
 
     if not query_params["is_specific_enough"]:
         return {"needs_more_specificity": True, "chunks": []}
 
+    # --- 1. PRE-FILTRADO POR METADATOS ---
     pre_filtered_chunks = []
     apply_pre_filtering = bool(query_params["years"] or query_params["regions"])
 
     if apply_pre_filtering:
         for chunk in all_docs_chunks:
             metadata = chunk.get("metadata", {})
-            year_match = True
-            if query_params["years"]:
-                year_meta_str = str(metadata.get("year", "")).strip()
-                year_match = year_meta_str in query_params["years"]
-
-            region_match = True
-            if query_params["regions"]:
-                region_meta_norm = normalize_text(metadata.get("region", ""))
-                region_match = any(q_reg == region_meta_norm for q_reg in query_params["regions"])
-
+            # Lógica de match (ningún cambio aquí)
+            year_match = not query_params["years"] or str(metadata.get("year", "")).strip() in query_params["years"]
+            region_match = not query_params["regions"] or any(q_reg == normalize_text(metadata.get("region", "")) for q_reg in query_params["regions"])
+            
             if year_match and region_match:
                 pre_filtered_chunks.append(chunk)
-
+        
         if not pre_filtered_chunks:
             return {"needs_more_specificity": False, "chunks": [], "no_data_for_filter": True, "params": query_params}
     else:
         pre_filtered_chunks = all_docs_chunks
 
-    if not pre_filtered_chunks:
-         return {"needs_more_specificity": False, "chunks": []}
+    # --- 2. BÚSQUEDA SEMÁNTICA SOBRE LOS CHUNKS FILTRADOS ---
+    try:
+        question_embedding = get_embedding_for_query(question, openai_client)
+    except Exception as e:
+        print(f"Error al generar embedding para la pregunta del usuario: {e}")
+        return {"error": "No se pudo procesar la pregunta para la búsqueda.", "chunks": []}
 
     relevance_scores = []
-    question_norm_keywords = set(query_params["keywords"])
+    for chunk in pre_filtered_chunks:
+        if 'embedding' in chunk and chunk['embedding'] is not None:
+            # Asegurarse que el embedding del chunk es un array numpy
+            chunk_embedding = np.array(chunk['embedding'], dtype=np.float32)
+            similarity = cosine_similarity(question_embedding, chunk_embedding)
+            relevance_scores.append({"score": similarity, "chunk": chunk})
 
-    if not question_norm_keywords and apply_pre_filtering and pre_filtered_chunks:
-        return {"needs_more_specificity": False, "chunks": pre_filtered_chunks[:max_chunks]}
-
-    if not question_norm_keywords and not apply_pre_filtering:
-        return {"needs_more_specificity": True, "chunks": []}
-
-    for chunk_idx, chunk in enumerate(pre_filtered_chunks):
-        metadata = chunk.get("metadata", {})
-        chunk_text_norm = normalize_text(chunk.get("chunk_text", ""))
-        titulo_norm = normalize_text(metadata.get("titulo_informe", ""))
-        entidad_norm = normalize_text(metadata.get("entidad_auditada", ""))
-
-        combined_text_for_scoring = f"{chunk_text_norm} {titulo_norm} {entidad_norm}"
-        chunk_keywords = set(re.findall(r'\b[a-z]{3,}\b', combined_text_for_scoring))
-
-        common_keywords = question_norm_keywords.intersection(chunk_keywords)
-        score = len(common_keywords)
-
-        source_field = chunk.get("source_field", "")
-        if source_field == "observacion" and any(kw in question_norm_keywords for kw in ["corrupcion", "irregularidad", "hallazgo", "perjuicio", "delito"]):
-            score += 5
-        if source_field == "objetivo" and "objetivo" in question_norm_keywords: score += 3
-        if source_field == "recomendacion" and any(kw in question_norm_keywords for kw in ["recomienda", "sugiere", "recomendacion"]): score += 3
-
-        if query_params["regions"]:
-            if any(q_reg in chunk_text_norm for q_reg in query_params["regions"]):
-                score += 1
-
-        relevance_scores.append({"score": score, "chunk": chunk, "original_index": chunk_idx})
-
-    relevant_chunks_sorted = sorted(relevance_scores, key=lambda x: (x["score"], -x["original_index"]), reverse=True)
-
-    if not question_norm_keywords and apply_pre_filtering and pre_filtered_chunks:
-         final_chunks = [item["chunk"] for item in relevant_chunks_sorted][:max_chunks]
-    else:
-        final_chunks = [item["chunk"] for item in relevant_chunks_sorted if item["score"] > 0][:max_chunks]
-
-    if not final_chunks and apply_pre_filtering:
-        return {"needs_more_specificity": False, "chunks": [], "no_data_for_filter_after_score": True, "params": query_params}
-
+    # Ordenar por similitud y devolver los mejores
+    relevant_chunks_sorted = sorted(relevance_scores, key=lambda x: x["score"], reverse=True)
+    
+    final_chunks = [item["chunk"] for item in relevant_chunks_sorted][:max_chunks]
+    
     return {"needs_more_specificity": False, "chunks": final_chunks}
 
-import os
-import json
 
-def load_chunks_from_jsonl():
-    # __file__ es la ruta del script actual (chatbot_logic.py)
-    script_dir = os.path.dirname(os.path.abspath(__file__)) # .../src_chatbot/
-    project_root = os.path.abspath(os.path.join(script_dir, '..', '..'))         # .../QLAB_CHATBOT_CORRUPCION/
-    input_file = os.path.join(project_root, 'output', 'salida_chunks_final.jsonl')
+
+def load_chunks_with_embeddings():
+    """Carga los chunks que ya incluyen los vectores de embedding desde el archivo procesado."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, '..', '..'))
+    # Apunta al NUEVO archivo con embeddings
+    input_file = os.path.join(project_root, 'output', 'chunks_with_embeddings.jsonl')
     
-
     docs_chunks_list = []
+    if not os.path.exists(input_file):
+        print(f"Error: El archivo de embeddings '{input_file}' no fue encontrado.")
+        print("Por favor, ejecuta primero el script 'generate_embeddings.py'.")
+        return []
+        
     try:
         with open(input_file, 'r', encoding='utf-8') as f:
             for line in f:
                 try:
                     chunk = json.loads(line.strip())
+                    # Convierte la lista de embedding a un array de numpy para cálculos eficientes
+                    if 'embedding' in chunk:
+                        chunk['embedding'] = np.array(chunk['embedding'], dtype=np.float32)
                     docs_chunks_list.append(chunk)
-                except json.JSONDecodeError as e:
-                    print(f"Advertencia: Omitiendo línea malformada en '{input_file}': {line.strip()}")
-                    print(f"Error de decodificación: {e}")
+                except (json.JSONDecodeError, KeyError):
                     continue
-    except FileNotFoundError:
-        print(f"Error: El archivo '{input_file}' no fue encontrado.")
-        return []
     except Exception as e:
         print(f"Ocurrió un error inesperado al leer '{input_file}': {e}")
         return []
-    print(f"Cargados {len(docs_chunks_list)} chunks desde {input_file}") # Ayuda para depurar
+    print(f"Cargados {len(docs_chunks_list)} chunks con embeddings desde {input_file}")
     return docs_chunks_list
 
-
-def main():
-    st.title("Chatbot Corrupción 💬")
-    st.markdown("Conversa con los informes de la contraloría sobre corrupción en gobiernos subnacionales en Perú (2016-2022).")
-    st.write("---")
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = [{"role": "assistant", "content": "Hola, soy el Chatbot Corrupción. ¿En qué puedo ayudarte?"}]
-
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    if user_input := st.chat_input("Escribe tu pregunta aquí..."):
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.markdown(user_input)
-
-        with st.spinner("Generando respuesta..."):
-            # Prepara el historial de mensajes para la API (excluyendo el mensaje del sistema y la entrada actual)
-            # El system prompt se añade dentro de send_question_to_openai
-            conversation_history = [
-                msg for msg in st.session_state.messages[:-1] if msg["role"] != "system"
-            ]
-            response_text = send_question_to_openai(user_input, docs_chunks, conversation_history)
-
-            assistant_message = {"role": "assistant", "content": response_text}
-            st.session_state.messages.append(assistant_message)
-            # Para mostrar la respuesta inmediatamente
-            with st.chat_message("assistant"):
-                 st.markdown(response_text)
-            # No necesitas st.experimental_rerun() aquí a menos que quieras forzar un rerun por otra razón.
-            # El chat_message ya actualiza la UI.
 
 
 def send_question_to_openai(question, all_docs_chunks, conversation_history, openai_client, system_prompt):
     """
-    Sends a question to OpenAI API after retrieving relevant chunks.
-    Args:
-        question (str): The user's question.
-        all_docs_chunks (list): List of all document chunks.
-        conversation_history (list): History of the conversation.
-        openai_client (OpenAI): The OpenAI API client instance.
-        system_prompt (str): The system prompt to guide the AI.
-    Returns:
-        str: The AI's response.
+    Envía la pregunta a OpenAI después de recuperar chunks relevantes usando búsqueda semántica.
     """
-    retrieval_result = find_relevant_chunks(question, all_docs_chunks, max_chunks=15)
+    # ¡Llamada a la nueva función de búsqueda semántica!
+    retrieval_result = find_relevant_chunks_semantic(
+        question, 
+        all_docs_chunks, 
+        openai_client,
+        max_chunks=15
+    )
 
     if retrieval_result.get("needs_more_specificity"):
         return "Por favor, proporciona más detalles en tu consulta, como un año específico o región, para poder ayudarte mejor."
+    
+    if retrieval_result.get("error"):
+        return f"Lo siento, ocurrió un error técnico durante la búsqueda: {retrieval_result['error']}"
 
     relevant_chunks = retrieval_result.get("chunks", [])
 
     if not relevant_chunks:
-        if retrieval_result.get("no_data_for_filter") or retrieval_result.get("no_data_for_filter_after_score"):
+        if retrieval_result.get("no_data_for_filter"):
             params = retrieval_result.get("params", {})
             year_str = ", ".join(params.get("years", [])) or "el período consultado"
             loc_parts = params.get("regions", [])
@@ -341,26 +299,23 @@ def send_question_to_openai(question, all_docs_chunks, conversation_history, ope
 
     MAX_HISTORY_MESSAGES = 10
     trimmed_history = conversation_history[-MAX_HISTORY_MESSAGES:]
-    messages = []
-    # Usa el system_prompt pasado como argumento
+    
     combined_system_prompt = f"{system_prompt}\n\nContexto relevante de los informes:\n{context_text}"
-    messages.append({"role": "system", "content": combined_system_prompt})
+    
+    messages = [
+        {"role": "system", "content": combined_system_prompt}
+    ]
     messages.extend(trimmed_history)
     messages.append({"role": "user", "content": question})
 
     try:
-        # Usa el openai_client pasado como argumento
         response = openai_client.chat.completions.create(
             model="gpt-4.1-nano",
             messages=messages,
-            temperature=0.2,
-            max_tokens=3500,
-            top_p=1,
-            frequency_penalty=0,
-            presence_penalty=0
+            temperature=0,
+            max_tokens=3500
         )
         return response.choices[0].message.content
     except Exception as e:
-        # En un entorno de producción, considera loguear el error de forma más robusta
-        print(f"Error al contactar OpenAI: {e}") # Mantener print para depuración
+        print(f"Error al contactar OpenAI: {e}")
         return "Lo siento, tuve un problema al procesar tu solicitud en este momento."
